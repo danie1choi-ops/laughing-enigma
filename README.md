@@ -9,8 +9,25 @@ Send one of these exact messages in a DM to the bot:
 - `help`
 - `stocks`
 - `crypto`
+- `energy start`
+- `energy stop`
+- `energy status`
+- `energy summary`
+- `energy report`
 
 The bot does not accept arbitrary shell commands. It only runs the whitelisted commands configured in `app.py`.
+
+The energy commands only start and stop the energy arbitrage project in live observation mode. They do not control a real battery or inverter.
+
+Energy observer details:
+
+- Project path: `~/Coding/energy-arbitrage`
+- Observation command: `python3 main.py --mode live-observe`
+- Editable command constant: `ENERGY_OBSERVE_COMMAND` near the top of `app.py`
+- Log file: `~/Coding/ai-slack-agent/logs/energy_observation.log`
+- `energy status` shows whether the observer is running and the last 20 log lines, when available.
+- `energy summary` asks Gemini to summarize the last 200 log lines.
+- `energy report` asks Gemini for a deeper diagnostic report from the last 500 log lines.
 
 ## Setup
 
@@ -83,7 +100,7 @@ python3 app.py
 
 On startup, the bot prints the `certifi` CA bundle path it will use for Slack HTTPS and Socket Mode TLS verification. This is safe to share because it does not include any Slack or Gemini secrets.
 
-DM the bot `help`, `stocks`, or `crypto`.
+DM the bot `help`, `stocks`, `crypto`, or one of the `energy ...` commands.
 
 ## SSL certificate troubleshooting
 

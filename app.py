@@ -2,7 +2,11 @@ import logging
 import os
 import ssl
 import subprocess
+import threading
+import time
+from collections import deque
 from dataclasses import dataclass
+from pathlib import Path
 
 import certifi
 from dotenv import load_dotenv
@@ -39,6 +43,14 @@ RAW_OUTPUT_LIMIT = 12_000
 COMMAND_TIMEOUT_SECONDS = 180
 GEMINI_MODEL = "gemini-2.5-flash"
 SUMMARY_UNAVAILABLE_PREFIX = "Gemini summary unavailable; showing raw output."
+BASE_DIR = Path(__file__).resolve().parent
+LOGS_DIR = BASE_DIR / "logs"
+ENERGY_PROJECT_DIR = Path.home() / "Coding" / "energy-arbitrage"
+ENERGY_LOG_PATH = LOGS_DIR / "energy_observation.log"
+ENERGY_OBSERVE_COMMAND = ["python3", "main.py", "--mode", "live-observe"]
+ENERGY_STOP_TIMEOUT_SECONDS = 15
+ENERGY_LOCK = threading.Lock()
+ENERGY_PROCESS: subprocess.Popen[str] | None = None
 
 
 @dataclass(frozen=True)
@@ -66,7 +78,12 @@ COMMANDS = {
     ),
 }
 
-HELP_TEXT = "Send `stocks` or `crypto` to run a whitelisted signal command. Send `help` to see this message."
+HELP_TEXT = (
+    "Send `stocks` or `crypto` to run a whitelisted signal command.\n"
+    "Energy observer commands: `energy start`, `energy stop`, `energy status`, "
+    "`energy summary`, `energy report`.\n"
+    "Send `help` to see this message."
+)
 
 
 def run_single_command(args: list[str], cwd: str) -> subprocess.CompletedProcess[str]:
@@ -120,6 +137,12 @@ def raw_output_fallback(raw_output: str) -> str:
     return f"{SUMMARY_UNAVAILABLE_PREFIX}\n\n{raw_output}"
 
 
+def trim_for_slack(text: str, limit: int = 3500) -> str:
+    if len(text) <= limit:
+        return text
+    return text[: limit - 40].rstrip() + "\n\n...truncated..."
+
+
 def summarize_command_output(command_name: str, raw_output: str) -> str:
     try:
         response = gemini_client.models.generate_content(
@@ -143,6 +166,151 @@ def summarize_command_output(command_name: str, raw_output: str) -> str:
         return raw_output_fallback(raw_output)
 
 
+def ensure_logs_dir() -> None:
+    LOGS_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def refresh_energy_process() -> subprocess.Popen[str] | None:
+    global ENERGY_PROCESS
+
+    if ENERGY_PROCESS is not None and ENERGY_PROCESS.poll() is not None:
+        ENERGY_PROCESS = None
+    return ENERGY_PROCESS
+
+
+def is_energy_running() -> bool:
+    return refresh_energy_process() is not None
+
+
+def read_last_log_lines(line_count: int) -> str:
+    if not ENERGY_LOG_PATH.exists():
+        return ""
+
+    with ENERGY_LOG_PATH.open("r", encoding="utf-8", errors="replace") as log_file:
+        return "".join(deque(log_file, maxlen=line_count)).strip()
+
+
+def format_energy_status() -> str:
+    status = "running" if is_energy_running() else "stopped"
+    log_tail = read_last_log_lines(20)
+
+    if not log_tail:
+        return f"Energy observer is `{status}`. No log available yet."
+
+    return trim_for_slack(f"Energy observer is `{status}`.\n\nLast 20 log lines:\n```{log_tail}```")
+
+
+def start_energy_observer() -> str:
+    global ENERGY_PROCESS
+
+    with ENERGY_LOCK:
+        if is_energy_running():
+            return "Energy observer is already running."
+
+        if not ENERGY_PROJECT_DIR.exists():
+            return f"Energy observer not started. Project directory missing: `{ENERGY_PROJECT_DIR}`"
+
+        if not (ENERGY_PROJECT_DIR / "main.py").exists():
+            return (
+                "Energy observer not started. `main.py` was not found in the energy project. "
+                "`ENERGY_OBSERVE_COMMAND` is defined near the top of `app.py` for editing."
+            )
+
+        ensure_logs_dir()
+        log_file = ENERGY_LOG_PATH.open("a", encoding="utf-8")
+        log_file.write(f"\n--- energy observer start requested {time.strftime('%Y-%m-%d %H:%M:%S')} ---\n")
+        log_file.flush()
+
+        try:
+            ENERGY_PROCESS = subprocess.Popen(
+                ENERGY_OBSERVE_COMMAND,
+                cwd=ENERGY_PROJECT_DIR,
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+        except OSError as exc:
+            log_file.write(f"Failed to start energy observer: {exc}\n")
+            return f"Energy observer failed to start: `{exc}`"
+        finally:
+            log_file.close()
+
+        return f"Energy observer started in observation mode. Log: `{ENERGY_LOG_PATH}`"
+
+
+def stop_energy_observer() -> str:
+    global ENERGY_PROCESS
+
+    with ENERGY_LOCK:
+        process = refresh_energy_process()
+        if process is None:
+            return "Energy observer is not running."
+
+        process.terminate()
+        try:
+            process.wait(timeout=ENERGY_STOP_TIMEOUT_SECONDS)
+            result = f"Energy observer stopped safely with exit code `{process.returncode}`."
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=5)
+            result = "Energy observer did not stop in time, so it was killed."
+
+        ENERGY_PROCESS = None
+        return result
+
+
+def summarize_energy_log(line_count: int, report: bool = False) -> str:
+    log_tail = read_last_log_lines(line_count)
+    if not log_tail:
+        return "No energy observation log is available yet."
+
+    if report:
+        prompt = (
+            "You are diagnosing an energy arbitrage live observation log for Slack. "
+            "Use exactly this output format:\n\n"
+            "Status:\n"
+            "Interesting Events:\n"
+            "Potential Issues:\n"
+            "Recommendation:\n\n"
+            "Flag bugs, stale data, strange repeated HOLD behaviour, missing timestamps, "
+            "command errors, volatile price behaviour, or anything operationally suspicious. "
+            "Do not invent data. Only use what appears in the log. If evidence is absent, say so.\n\n"
+            f"Last {line_count} log lines:\n{log_tail}"
+        )
+    else:
+        prompt = (
+            "You summarize an energy arbitrage live observation log for Slack. "
+            "Use exactly this output format:\n\n"
+            "Status:\n"
+            "Action:\n"
+            "Notes:\n\n"
+            "Keep it concise. Do not invent data, prices, timestamps, or actions. "
+            "Only summarize what appears in the log.\n\n"
+            f"Last {line_count} log lines:\n{log_tail}"
+        )
+
+    try:
+        response = gemini_client.models.generate_content(model=GEMINI_MODEL, contents=prompt)
+        return trim_for_slack(response.text.strip(), limit=6000 if report else 3500)
+    except Exception:
+        logger.exception("Gemini energy summary failed")
+        return trim_for_slack(raw_output_fallback(log_tail))
+
+
+def handle_energy_command(text: str) -> str:
+    if text == "energy start":
+        return start_energy_observer()
+    if text == "energy stop":
+        return stop_energy_observer()
+    if text == "energy status":
+        return format_energy_status()
+    if text == "energy summary":
+        return summarize_energy_log(200)
+    if text == "energy report":
+        return summarize_energy_log(500, report=True)
+    return "Unknown energy command. Send `help` for supported commands."
+
+
 @app.event("message")
 def handle_message_events(body, say, logger):
     event = body.get("event", {})
@@ -160,8 +328,12 @@ def handle_message_events(body, say, logger):
         say(HELP_TEXT)
         return
 
+    if text.startswith("energy "):
+        say(handle_energy_command(text))
+        return
+
     if text not in COMMANDS:
-        say("Unknown command. Send `help`, `stocks`, or `crypto`.")
+        say("Unknown command. Send `help`, `stocks`, `crypto`, or an `energy ...` command.")
         return
 
     say(f"Running `{text}`...")
