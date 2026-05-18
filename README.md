@@ -1,10 +1,10 @@
 # AI Slack Agent
 
-A local Slack Socket Mode bot for running whitelisted trading signal scripts from Slack DMs and returning concise Gemini summaries.
+A local Slack Socket Mode bot for running whitelisted trading signal scripts from Slack DMs or invited Slack channels and returning concise Gemini summaries.
 
 ## Commands
 
-Send one of these exact messages in a DM to the bot:
+Send one of these exact messages in a DM to the bot or in a public channel where the bot has been invited:
 
 - `help`
 - `stocks`
@@ -14,6 +14,11 @@ Send one of these exact messages in a DM to the bot:
 - `energy status`
 - `energy summary`
 - `energy report`
+
+In channels, mention style also works:
+
+- `@Demo App energy status`
+- `@Demo App energy summary`
 
 The bot does not accept arbitrary shell commands. It only runs the whitelisted commands configured in `app.py`.
 
@@ -61,20 +66,34 @@ pip install --upgrade google-genai python-dotenv slack_bolt slack_sdk certifi
 ### 4. Enable Socket Mode
 
 1. In the Slack app settings, open **Socket Mode**.
-2. Enable Socket Mode.
+2. Enable Socket Mode. Socket Mode must be **ON**.
 3. Create an app-level token with the `connections:write` scope.
 4. Copy the token that starts with `xapp-`.
 
-### 5. Add required Slack scopes
+### 5. Add required Slack scopes and events
 
 In **OAuth & Permissions**, add these Bot Token Scopes:
 
+- `app_mentions:read`
 - `chat:write`
+- `channels:history`
 - `im:history`
 - `im:read`
 - `im:write`
 
-Then install or reinstall the app to your workspace and copy the bot token that starts with `xoxb-`.
+In **Event Subscriptions**, turn events on and subscribe to these bot events:
+
+- `message.im`
+- `message.channels`
+- `app_mention`
+
+After changing scopes or events, reinstall the app to your workspace and copy the bot token that starts with `xoxb-`.
+
+To use a public channel such as `#energy-observer`, create the channel and invite the bot:
+
+```text
+/invite @Demo App
+```
 
 ### 6. Fill `.env`
 
@@ -95,12 +114,22 @@ GEMINI_API_KEY=your-gemini-api-key
 ### 7. Run the bot
 
 ```bash
+cd ~/Coding/ai-slack-agent
+source .venv/bin/activate
 python3 app.py
 ```
 
 On startup, the bot prints the `certifi` CA bundle path it will use for Slack HTTPS and Socket Mode TLS verification. This is safe to share because it does not include any Slack or Gemini secrets.
 
 DM the bot `help`, `stocks`, `crypto`, or one of the `energy ...` commands.
+
+In `#energy-observer`, test:
+
+```text
+help
+energy status
+@Demo App energy summary
+```
 
 ## SSL certificate troubleshooting
 

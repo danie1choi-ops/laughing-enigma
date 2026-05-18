@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 import ssl
 import subprocess
 import threading
@@ -76,6 +77,14 @@ COMMANDS = {
             ["cat", "outputs/current_portfolio_candidates.csv"],
         ],
     ),
+}
+
+ENERGY_COMMANDS = {
+    "energy start",
+    "energy stop",
+    "energy status",
+    "energy summary",
+    "energy report",
 }
 
 HELP_TEXT = (
@@ -311,39 +320,88 @@ def handle_energy_command(text: str) -> str:
     return "Unknown energy command. Send `help` for supported commands."
 
 
-@app.event("message")
-def handle_message_events(body, say, logger):
-    event = body.get("event", {})
+def starts_with_bot_mention(text: str, bot_user_id: str | None) -> bool:
+    if not bot_user_id:
+        return False
+    return bool(re.match(rf"^\s*<@{re.escape(bot_user_id)}(?:\|[^>]+)?>", text))
 
-    if event.get("bot_id") or event.get("subtype"):
-        return
 
-    channel_type = event.get("channel_type")
-    text = (event.get("text") or "").strip().lower()
+def normalize_slack_command(text: str, bot_user_id: str | None = None) -> str:
+    normalized = text.strip()
+    if bot_user_id:
+        normalized = re.sub(
+            rf"^<@{re.escape(bot_user_id)}(?:\|[^>]+)?>\s*",
+            "",
+            normalized,
+            count=1,
+        )
+    return normalized.strip().lower()
 
-    if channel_type != "im":
-        return
 
-    if text == "help":
+def log_slack_message_event(event: dict, command: str) -> None:
+    print(
+        "Slack message event received: "
+        f"channel={event.get('channel')} "
+        f"user={event.get('user')} "
+        f"normalised_command={command!r}"
+    )
+
+
+def dispatch_command(command: str, say, logger) -> None:
+    if command == "help":
         say(HELP_TEXT)
         return
 
-    if text.startswith("energy "):
-        say(handle_energy_command(text))
+    if command in ENERGY_COMMANDS:
+        say(handle_energy_command(command))
         return
 
-    if text not in COMMANDS:
-        say("Unknown command. Send `help`, `stocks`, `crypto`, or an `energy ...` command.")
+    if command not in COMMANDS:
         return
 
-    say(f"Running `{text}`...")
-    raw_output = run_whitelisted_command(text)
+    say(f"Running `{command}`...")
+    raw_output = run_whitelisted_command(command)
     try:
-        summary = summarize_command_output(text, raw_output)
-    except Exception as exc:
+        summary = summarize_command_output(command, raw_output)
+    except Exception:
         logger.exception("Gemini summary failed")
         summary = raw_output_fallback(raw_output)
     say(summary)
+
+
+@app.event("message")
+def handle_message_events(body, say, logger, context):
+    event = body.get("event", {})
+    bot_user_id = context.get("bot_user_id")
+
+    if event.get("bot_id") or event.get("subtype") or event.get("user") == bot_user_id:
+        return
+
+    channel_type = event.get("channel_type")
+    raw_text = event.get("text") or ""
+    command = normalize_slack_command(raw_text, bot_user_id)
+    log_slack_message_event(event, command)
+
+    if channel_type not in {"im", "channel"}:
+        return
+
+    if channel_type != "im" and starts_with_bot_mention(raw_text, bot_user_id):
+        return
+
+    dispatch_command(command, say, logger)
+
+
+@app.event("app_mention")
+def handle_app_mention_events(body, say, logger, context):
+    event = body.get("event", {})
+    bot_user_id = context.get("bot_user_id")
+
+    if event.get("bot_id") or event.get("subtype") or event.get("user") == bot_user_id:
+        return
+
+    command = normalize_slack_command(event.get("text") or "", bot_user_id)
+    log_slack_message_event(event, command)
+    dispatch_command(command, say, logger)
 
 
 if __name__ == "__main__":
