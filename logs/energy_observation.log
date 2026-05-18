@@ -1,0 +1,6 @@
+
+--- energy observer start requested 2026-05-19 07:42:36 ---
+Traceback (most recent call last):
+  File "/Users/danielchoi/Coding/energyArbitrage/energy_arbitrage/src/main.py", line 7, in <module>
+    from src import config
+ModuleNotFoundError: No module named 'src'

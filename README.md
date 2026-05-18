@@ -26,8 +26,8 @@ The energy commands only start and stop the energy arbitrage project in live obs
 
 Energy observer details:
 
-- Project path: `~/Coding/energy-arbitrage`
-- Observation command: `python3 main.py --mode live-observe`
+- Project path: `/Users/danielchoi/Coding/energyArbitrage/energy_arbitrage`
+- Observation command: `cd "/Users/danielchoi/Coding/energyArbitrage/energy_arbitrage" && python3 src/main.py --mode live-observe`
 - Editable command constant: `ENERGY_OBSERVE_COMMAND` near the top of `app.py`
 - Log file: `~/Coding/ai-slack-agent/logs/energy_observation.log`
 - `energy status` shows whether the observer is running and the last 20 log lines, when available.

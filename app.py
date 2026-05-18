@@ -46,9 +46,9 @@ GEMINI_MODEL = "gemini-2.5-flash"
 SUMMARY_UNAVAILABLE_PREFIX = "Gemini summary unavailable; showing raw output."
 BASE_DIR = Path(__file__).resolve().parent
 LOGS_DIR = BASE_DIR / "logs"
-ENERGY_PROJECT_DIR = Path.home() / "Coding" / "energy-arbitrage"
+ENERGY_PROJECT_DIR = Path("/Users/danielchoi/Coding/energyArbitrage/energy_arbitrage")
 ENERGY_LOG_PATH = LOGS_DIR / "energy_observation.log"
-ENERGY_OBSERVE_COMMAND = ["python3", "main.py", "--mode", "live-observe"]
+ENERGY_OBSERVE_COMMAND = ["python3", "src/main.py", "--mode", "live-observe"]
 ENERGY_STOP_TIMEOUT_SECONDS = 15
 ENERGY_LOCK = threading.Lock()
 ENERGY_PROCESS: subprocess.Popen[str] | None = None
@@ -219,9 +219,9 @@ def start_energy_observer() -> str:
         if not ENERGY_PROJECT_DIR.exists():
             return f"Energy observer not started. Project directory missing: `{ENERGY_PROJECT_DIR}`"
 
-        if not (ENERGY_PROJECT_DIR / "main.py").exists():
+        if not (ENERGY_PROJECT_DIR / "src/main.py").exists():
             return (
-                "Energy observer not started. `main.py` was not found in the energy project. "
+                "Energy observer not started. `src/main.py` was not found in the energy project. "
                 "`ENERGY_OBSERVE_COMMAND` is defined near the top of `app.py` for editing."
             )
 
@@ -347,26 +347,31 @@ def log_slack_message_event(event: dict, command: str) -> None:
     )
 
 
-def dispatch_command(command: str, say, logger) -> None:
+def handle_command(command: str, say) -> None:
+    matched_command = None
+
     if command == "help":
+        matched_command = "help"
+        print(f"Command routing: normalised_command={command!r} matched={matched_command!r}")
         say(HELP_TEXT)
         return
 
     if command in ENERGY_COMMANDS:
+        matched_command = command
+        print(f"Command routing: normalised_command={command!r} matched={matched_command!r}")
         say(handle_energy_command(command))
         return
 
-    if command not in COMMANDS:
+    if command in COMMANDS:
+        matched_command = command
+        print(f"Command routing: normalised_command={command!r} matched={matched_command!r}")
+        say(f"Running `{command}`...")
+        raw_output = run_whitelisted_command(command)
+        summary = summarize_command_output(command, raw_output)
+        say(summary)
         return
 
-    say(f"Running `{command}`...")
-    raw_output = run_whitelisted_command(command)
-    try:
-        summary = summarize_command_output(command, raw_output)
-    except Exception:
-        logger.exception("Gemini summary failed")
-        summary = raw_output_fallback(raw_output)
-    say(summary)
+    print(f"Command routing: normalised_command={command!r} ignored; not recognised")
 
 
 @app.event("message")
@@ -377,18 +382,14 @@ def handle_message_events(body, say, logger, context):
     if event.get("bot_id") or event.get("subtype") or event.get("user") == bot_user_id:
         return
 
-    channel_type = event.get("channel_type")
     raw_text = event.get("text") or ""
     command = normalize_slack_command(raw_text, bot_user_id)
     log_slack_message_event(event, command)
 
-    if channel_type not in {"im", "channel"}:
+    if starts_with_bot_mention(raw_text, bot_user_id):
         return
 
-    if channel_type != "im" and starts_with_bot_mention(raw_text, bot_user_id):
-        return
-
-    dispatch_command(command, say, logger)
+    handle_command(command, say)
 
 
 @app.event("app_mention")
@@ -401,7 +402,7 @@ def handle_app_mention_events(body, say, logger, context):
 
     command = normalize_slack_command(event.get("text") or "", bot_user_id)
     log_slack_message_event(event, command)
-    dispatch_command(command, say, logger)
+    handle_command(command, say)
 
 
 if __name__ == "__main__":
